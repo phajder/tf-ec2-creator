@@ -40,6 +40,12 @@ check_aws_configuration() {
         exit 1
     fi
 
+     # Ensure Terraform variable file exists (to prevent first-run issues)
+    if [[ ! -f "$TF_VARS_FILE" ]]; then
+        echo "[INFO] Terraform variables file ($TF_VARS_FILE) does not exists. Creating with empty values."
+        echo "public_key = \"\"" > "$TF_VARS_FILE"
+    fi
+
     # Run Terraform init and apply just to test credentials
     if ! $TERRAFORM_CMD -chdir="$INFRA_DIR" init -backend=false &>/dev/null; then
         echo "[ERROR] Terraform initialization failed. Check your installation."
@@ -117,10 +123,10 @@ destroy_infra() {
     echo "[INFO] Infrastructure destroyed successfully."
 }
 
-# Reset infrastructure: refresh + destroy
+# Reset infrastructure: destroy + create
 reset_infra() {
-    refresh_state
     destroy_infra
+    create_infra
 }
 
 # Update SSH Config with new IPs from Terraform state
@@ -140,6 +146,11 @@ update_ssh_config() {
         echo "# Terraform Managed Start"
         index=1
         for ip in $VM_IPS; do
+            if [[ -z "$ip" ]]; then
+                echo "[WARNING] Skipping an entry with an empty IP. Check your AWS instance status."
+                continue
+            fi
+            
             echo "Host terraform-vm-$index"
             echo "    HostName $ip"
             echo "    User $SSH_USER"
@@ -153,9 +164,21 @@ update_ssh_config() {
 
     echo "[INFO] Terraform SSH config updated."
 
-    if ! grep -q "Include $TF_SSH_CONFIG_PATH" "$SSH_CONFIG_PATH"; then
-        echo "[INFO] Adding Include directive to main SSH config."
-        echo "Include $TF_SSH_CONFIG_PATH" >> "$SSH_CONFIG_PATH"
+    # Ensure SSH config file exists to prevent errors with grep
+    if [[ ! -f "$SSH_CONFIG_PATH" ]]; then
+        echo "[INFO] SSH config file does not exist. Creating SSH config file: $SSH_CONFIG_PATH"
+        touch "$SSH_CONFIG_PATH"
+    fi
+
+    # Ensure SSH config includes our Terraform config for Host matching
+    if ! grep -q "Host terraform-vm-*" "$SSH_CONFIG_PATH"; then
+        echo "[INFO] Adding Host directive to main SSH config."
+        {
+            echo ""
+            echo "# Terraform Managed Host Include"
+            echo "Host terraform-vm-*"
+            echo "    Include $TF_SSH_CONFIG_PATH"
+        } >> "$SSH_CONFIG_PATH"
     fi
 }
 
@@ -167,11 +190,15 @@ clean_ssh_config() {
     fi
 
     # Ensure SSH config exists before modifying
-    if [[ -f "$SSH_CONFIG_PATH" ]] && grep -q "Include $TF_SSH_CONFIG_PATH" "$SSH_CONFIG_PATH"; then
-        echo "[INFO] Removing Include directive from main SSH config."
+    if [[ -f "$SSH_CONFIG_PATH" ]]; then
+        echo "[INFO] Cleaning up Terraform Include directive from main SSH config."
 
-        # Use `grep -v` to filter out the line safely
-        grep -vF "Include $TF_SSH_CONFIG_PATH" "$SSH_CONFIG_PATH" > "$SSH_CONFIG_PATH.tmp" && mv "$SSH_CONFIG_PATH.tmp" "$SSH_CONFIG_PATH"
+        # Remove the "Host terraform-vm-*" block from SSH config
+        awk '
+            /# Terraform Managed Host Include/ {skip=1; next}
+            skip && /^Host / {skip=0}
+            !skip
+        ' "$SSH_CONFIG_PATH" > "$SSH_CONFIG_PATH.tmp" && mv "$SSH_CONFIG_PATH.tmp" "$SSH_CONFIG_PATH"
     fi
 }
 
