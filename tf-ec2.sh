@@ -15,7 +15,7 @@ SSH_PUBLIC_KEY_PATH="${SSH_KEY_PATH}.pub"
 
 # Function to check if required dependencies are installed
 check_dependencies() {
-    REQUIRED_TOOLS=("terraform" "jq" "ssh-keygen" "sed")
+    REQUIRED_TOOLS=("terraform" "jq" "ssh-keygen" "grep", "awk")
 
     for tool in "${REQUIRED_TOOLS[@]}"; do
         if ! command -v "$tool" &>/dev/null; then
@@ -150,7 +150,7 @@ update_ssh_config() {
                 echo "[WARNING] Skipping an entry with an empty IP. Check your AWS instance status."
                 continue
             fi
-            
+
             echo "Host terraform-vm-$index"
             echo "    HostName $ip"
             echo "    User $SSH_USER"
